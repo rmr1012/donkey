@@ -220,4 +220,3 @@ def param_gen(params):
     '''
     for p in itertools.product(*params.values()):
         yield dict(zip(params.keys(), p ))
-

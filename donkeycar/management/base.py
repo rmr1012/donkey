@@ -1,14 +1,23 @@
+#!/usr/bin/env python3
+"""
+Upload a file to S3 (requires amazon credentials).
 
+Usage:
+     donkey <command> [--file_path=<file_path>]
+
+Options:
+  --file_path=<file_path> name of dataset file to save.
+  --bucket=<bucket>  name of S3 bucket to upload data. [default: donkey_resources].
+"""
+
+from docopt import docopt
 import sys
 import os
 import socket
 import shutil
 import argparse
 
-import donkeycar as dk
-from donkeycar.parts.datastore import Tub
 from .tub import TubManager
-
 
 PACKAGE_PATH = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 TEMPLATES_PATH = os.path.join(PACKAGE_PATH, 'templates')
@@ -21,27 +30,6 @@ def make_dir(path):
     return real_path
 
 
-def load_config(config_path):
-
-    '''
-    load a config from the given path
-    '''
-    conf = os.path.expanduser(config_path)
-
-    if not os.path.exists(conf):
-        print("No config file at location: %s. Add --config to specify\
-                location or run from dir containing config.py." % conf)
-        return None
-
-    try:
-        cfg = dk.load_config(conf)
-    except:
-        print("Exception while loading config from", conf)
-        return None
-
-    return cfg
-
-
 class BaseCommand():
     pass
 
@@ -50,8 +38,8 @@ class CreateCar(BaseCommand):
     
     def parse_args(self, args):
         parser = argparse.ArgumentParser(prog='createcar', usage='%(prog)s [options]')
-        parser.add_argument('--path', default=None, help='path where to create car folder')
-        parser.add_argument('--template', default=None, help='name of car template to use')
+        parser.add_argument('--path', help='path where to create car folder')
+        parser.add_argument('--template', help='name of car template to use')
         parser.add_argument('--overwrite', action='store_true', help='should replace existing files')
         
         parsed_args = parser.parse_args(args)
@@ -61,18 +49,16 @@ class CreateCar(BaseCommand):
         args = self.parse_args(args)
         self.create_car(path=args.path, template=args.template, overwrite=args.overwrite)
     
-    def create_car(self, path, template='donkey2', overwrite=False):
+    def create_car(self, path, template, overwrite=False):
         """
         This script sets up the folder struction for donkey to work. 
         It must run without donkey installed so that people installing with
         docker can build the folder structure for docker to mount to.
         """
-
-        #these are neeeded incase None is passed as path
-        path = path or '~/d2'
+        
+        path = path or '~/mydonkey'
         template = template or 'donkey2'
-
-
+        
         print("Creating car folder: {}".format(path))
         path = make_dir(path)
         
@@ -101,7 +87,6 @@ class CreateCar(BaseCommand):
             shutil.copyfile(config_template_path, car_config_path)
  
         print("Donkey setup complete.")
-
 
 
 class UploadData(BaseCommand):
@@ -145,11 +130,11 @@ class CalibrateCar(BaseCommand):
         return parsed_args
 
     def run(self, args):
-        from donkeycar.parts.actuator import PCA9685
+        import donkeycar as dk
     
         args = self.parse_args(args)
         channel = int(args.channel)
-        c = PCA9685(channel)
+        c = dk.parts.PCA9685(channel)
         
         for i in range(10):
             pmw = int(input('Enter a PWM setting to test(0-1500)'))
@@ -171,8 +156,9 @@ class MakeMovie(BaseCommand):
         Load the images from a tub and create a movie from them.
         Movie
         '''
+        import donkeycar as dk
         import moviepy.editor as mpy
-
+        import os
 
         args, parser = self.parse_args(args)
 
@@ -193,7 +179,7 @@ class MakeMovie(BaseCommand):
             print("Exception while loading config from", conf)
             return
 
-        self.tub = Tub(args.tub)
+        self.tub = dk.parts.Tub(args.tub)
         self.num_rec = self.tub.get_num_records()
         self.iRec = 0
 
@@ -220,201 +206,15 @@ class MakeMovie(BaseCommand):
         
         return image # returns a 8-bit RGB array
 
-
-
-
-
-class Sim(BaseCommand):
-    '''
-    Start a websocket SocketIO server to talk to a donkey simulator    
-    '''
-    
-    def parse_args(self, args):
-        parser = argparse.ArgumentParser(prog='sim')
-        parser.add_argument('--model', help='the model to use for predictions')
-        parser.add_argument('--config', default='./config.py', help='location of config file to use. default: ./config.py')
-        parser.add_argument('--type', default='categorical', help='model type to use when loading. categorical|linear')
-        parser.add_argument('--top_speed', default='3', help='what is top speed to drive')
-        parsed_args = parser.parse_args(args)
-        return parsed_args, parser
-
-    def run(self, args):
-        '''
-        Start a websocket SocketIO server to talk to a donkey simulator
-        '''
-        import socketio
-        from donkeycar.parts.simulation import SteeringServer
-        from donkeycar.parts.keras import KerasCategorical, KerasLinear
-
-        args, parser = self.parse_args(args)
-
-        cfg = load_config(args.config)
-
-        if cfg is None:
-            return
-
-        #TODO: this logic should be in a pilot or modle handler part.
-        if args.type == "categorical":
-            kl = KerasCategorical()
-        elif args.type == "linear":
-            kl = KerasLinear(num_outputs=2)
-        else:
-            print("didn't recognice type:", args.type)
-            return
-
-        #can provide an optional image filter part
-        img_stack = None
-
-        #load keras model
-        kl.load(args.model)  
-
-        #start socket server framework
-        sio = socketio.Server()
-
-        top_speed = float(args.top_speed)
-
-        #start sim server handler
-        ss = SteeringServer(sio, kpart=kl, top_speed=top_speed, image_part=img_stack)
-                
-        #register events and pass to server handlers
-
-        @sio.on('telemetry')
-        def telemetry(sid, data):
-            ss.telemetry(sid, data)
-
-        @sio.on('connect')
-        def connect(sid, environ):
-            ss.connect(sid, environ)
-
-        ss.go(('0.0.0.0', 9090))
-
-
-
-class TubCheck(BaseCommand):
-    def parse_args(self, args):
-        parser = argparse.ArgumentParser(prog='tubcheck', usage='%(prog)s [options]')
-        parser.add_argument('tubs', nargs='+', help='paths to tubs')
-        parsed_args = parser.parse_args(args)
-        return parsed_args
-
-    def check(self, tub_paths, fix=False):
-        '''
-        Check for any problems. Looks at tubs and find problems in any records or images that won't open.
-        If fix is True, then delete images and records that cause problems.
-        '''
-        tubs = [Tub(path) for path in tub_paths]
-
-        for tub in tubs:
-            tub.check(fix=fix)
-
-    def run(self, args):
-        args = self.parse_args(args)
-        self.check(args.tubs)
-
-
-class ShowHistogram(BaseCommand):
-
-    def parse_args(self, args):
-        parser = argparse.ArgumentParser(prog='tubhist', usage='%(prog)s [options]')
-        parser.add_argument('tubs', nargs='+', help='paths to tubs')
-        parser.add_argument('--record', default=None, help='name of record to create histogram')
-        parsed_args = parser.parse_args(args)
-        return parsed_args
-
-    def show_histogram(self, tub_paths, record_name):
-        '''
-        Produce a histogram of record type frequency in the given tub
-        '''
-        from matplotlib import pyplot as plt
-        from donkeycar.parts.datastore import TubGroup
-
-        tg = TubGroup(tub_paths=tub_paths)
-        if record_name is not None:
-            tg.df[record_name].hist(bins=50)
-        else:
-            tg.df.hist(bins=50)
-        plt.show()
-
-    def run(self, args):
-        args = self.parse_args(args)
-        args.tubs = ','.join(args.tubs)
-        self.show_histogram(args.tubs, args.record)
-
-
-class ShowPredictionPlots(BaseCommand):
-
-    def plot_predictions(cfg, tub_paths, model_path):
-        '''
-        Plot model predictions for angle and throttle against data from tubs.
-
-        '''
-        import matplotlib.pyplot as plt
-        import pandas as pd
-        from donkeycar.parts.datastore import TubGroup
-        from donkeycar.parts.keras import KerasCategorical
-
-        tg = TubGroup(tub_paths)
-
-        model_path = os.path.expanduser(model_path)
-        model = KerasCategorical()
-        model.load(model_path)
-
-        gen = tg.get_batch_gen(batch_size=len(tg.df),shuffle=False)
-        arr = next(gen)
-
-        """
-        THIS WILL SHOW the output of a predicted model.
-        
-        
-        for tub in tubs:
-            num_records = tub.get_num_records()
-            for iRec in tub.get_index(shuffled=False):
-                record = tub.get_record(iRec)
-
-                img = record["cam/image_array"]
-                user_angle = float(record["user/angle"])
-                user_throttle = float(record["user/throttle"])
-                pilot_angle, pilot_throttle = model.run(img)
-
-                user_angles.append(user_angle)
-                user_throttles.append(user_throttle)
-                pilot_angles.append(pilot_angle)
-                pilot_throttles.append(pilot_throttle)
-
-        angles_df = pd.DataFrame({'user_angle': user_angles, 'pilot_angle': pilot_angles})
-        throttles_df = pd.DataFrame({'user_throttle': user_throttles, 'pilot_throttle': pilot_throttles})
-
-        fig = plt.figure()
-
-        title = "Model Predictions\nTubs: " + tub_names + "\nModel: " + model_name
-        fig.suptitle(title)
-
-        ax1 = fig.add_subplot(211)
-        ax2 = fig.add_subplot(212)
-
-        angles_df.plot(ax=ax1)
-        throttles_df.plot(ax=ax2)
-
-        ax1.legend(loc=4)
-        ax2.legend(loc=4)
-
-        plt.show()
-        """
-
 def execute_from_command_line():
-    """
-    This is the fuction linked to the "donkey" terminal command.
-    """
+    
     commands = {
             'createcar': CreateCar,
             'findcar': FindCar,
             'calibrate': CalibrateCar,
-            'tubclean': TubManager,
-            'tubhist': ShowHistogram,
-            'tubplot': ShowPredictionPlots,
-            'tubcheck': TubCheck,
+            'tub': TubManager,
             'makemovie': MakeMovie,
-            'sim': Sim,
+            #'calibratesteering': CalibrateSteering,
                 }
     
     args = sys.argv[:]

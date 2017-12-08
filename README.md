@@ -1,5 +1,5 @@
 # donkeycar: a python self driving library 
-# This fork is used to test the image segmentation implementation as an ehancement to the network performance
+
 ![build status](https://travis-ci.org/wroscoe/donkey.svg?branch=master)
 
 Donkeycar is minimalist and modular self driving library written in Python. It is 
