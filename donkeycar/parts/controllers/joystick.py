@@ -361,8 +361,9 @@ class JoystickController(object):
 
             time.sleep(self.poll_delay)
 
-    def run_threaded(self, img_arr=None):
-        self.img_arr = img_arr
+    def run_threaded(self, img_arr_top=None, img_arr_bot=None):
+        self.img_arr_top = img_arr_top
+	self.img_arr_bot = img_arr_bot
         return self.angle, self.throttle, self.mode, self.recording
 
     def shutdown(self):
